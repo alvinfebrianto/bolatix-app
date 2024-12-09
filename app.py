@@ -63,12 +63,8 @@ try:
     global bucket
     bucket = storage_client.bucket(BUCKET_NAME)
     print(f"Successfully initialized bucket: {BUCKET_NAME}")
-    
-    model_history, model_coldstart, dataset, use_dummy = load_models_and_dataset(storage_client)
-    print(f"Models loaded. Use dummy data: {use_dummy}")
 except Exception as e:
     print(f"Firebase/Storage initialization error: {e}")
-    use_dummy = True
 
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp'}
 
@@ -115,87 +111,60 @@ def upload_profile_picture(file, user_id):
         print(f"Upload error: {str(e)}")
         raise
 
-def download_model_from_gcs(storage_client, bucket_name, source_blob_name):
+HISTORY_MODEL_PATH = 'models/history.h5'
+COLDSTART_MODEL_PATH = 'models/cold_start.h5'
+DATASET_PATH = 'data/dataset.csv'
+
+def download_blob_to_memory(bucket_name, source_blob_name):
+    """Downloads a blob from Google Cloud Storage to memory."""
     try:
+        storage_client = storage.Client()
         bucket = storage_client.bucket(bucket_name)
         blob = bucket.blob(source_blob_name)
         
+        # Download the file to memory
         file_bytes = blob.download_as_bytes()
         return file_bytes
     except Exception as e:
-        print(f"Error downloading {source_blob_name} from GCS: {e}")
+        print(f"Error downloading {source_blob_name}: {e}")
         return None
+
+def load_models_and_dataset():
+    """Load models and dataset from Google Cloud Storage."""
+    global model_history, model_coldstart, dataset, USE_DUMMY
     
-def load_models_and_dataset(storage_client):
-    global use_dummy, model_history, model_coldstart, dataset
-    
-    use_dummy = True
-    model_history = None
-    model_coldstart = None
-    dataset = pd.DataFrame()
-
-    GCS_MODEL_BUCKET = BUCKET_NAME
-    GCS_MODEL_PATHS = {
-        'HISTORY_MODEL': 'models/history.h5',
-        'COLDSTART_MODEL': 'models/cold_start.h5',
-        'DATASET': 'data/dataset.csv'
-    }
-
-    LOCAL_MODEL_PATHS = {
-        'HISTORY_MODEL': '/models/history.h5',
-        'COLDSTART_MODEL': '/models/cold_start.h5',
-        'DATASET': '/data/dataset.csv'
-    }
-
     try:
-        # First, try to download from Google Cloud Storage
-        history_model_bytes = download_model_from_gcs(storage_client, GCS_MODEL_BUCKET, GCS_MODEL_PATHS['HISTORY_MODEL'])
-        coldstart_model_bytes = download_model_from_gcs(storage_client, GCS_MODEL_BUCKET, GCS_MODEL_PATHS['COLDSTART_MODEL'])
-        dataset_bytes = download_model_from_gcs(storage_client, GCS_MODEL_BUCKET, GCS_MODEL_PATHS['DATASET'])
-
-        # If cloud storage download fails, try local files
+        # Download and load models
+        history_model_bytes = download_blob_to_memory(GCS_BUCKET_NAME, HISTORY_MODEL_PATH)
+        coldstart_model_bytes = download_blob_to_memory(GCS_BUCKET_NAME, COLDSTART_MODEL_PATH)
+        dataset_bytes = download_blob_to_memory(GCS_BUCKET_NAME, DATASET_PATH)
+        
+        # Check if all files are downloaded successfully
         if not (history_model_bytes and coldstart_model_bytes and dataset_bytes):
-            print("Falling back to local model files")
-            
-            # Check local model files exist
-            if all(os.path.exists(path) for path in LOCAL_MODEL_PATHS.values()):
-                history_model_path = LOCAL_MODEL_PATHS['HISTORY_MODEL']
-                coldstart_model_path = LOCAL_MODEL_PATHS['COLDSTART_MODEL']
-                dataset_path = LOCAL_MODEL_PATHS['DATASET']
-            else:
-                raise FileNotFoundError("No model files found in cloud or local storage")
-
-        else:
-            # Create temporary file paths for cloud-downloaded files
-            os.makedirs('/tmp/models', exist_ok=True)
-            
-            history_model_path = '/tmp/models/history.h5'
-            coldstart_model_path = '/tmp/models/cold_start.h5'
-            dataset_path = '/tmp/models/dataset.csv'
-
-            with open(history_model_path, 'wb') as f:
-                f.write(history_model_bytes)
-            with open(coldstart_model_path, 'wb') as f:
-                f.write(coldstart_model_bytes)
-            with open(dataset_path, 'wb') as f:
-                f.write(dataset_bytes)
-
-        model_history = tf.keras.models.load_model(history_model_path)
-        model_coldstart = tf.keras.models.load_model(coldstart_model_path)
-
-        dataset = pd.read_csv(dataset_path)
+            print("Failed to download one or more files")
+            USE_DUMMY = True
+            return
+        
+        # Load models from memory
+        with io.BytesIO(history_model_bytes) as model_file:
+            model_history = tf.keras.models.load_model(model_file)
+        
+        with io.BytesIO(coldstart_model_bytes) as model_file:
+            model_coldstart = tf.keras.models.load_model(model_file)
+        
+        # Load dataset from memory
+        dataset = pd.read_csv(io.BytesIO(dataset_bytes))
         dataset['Score tim home'] = dataset['Score tim home'].fillna(0).astype(int)
         dataset['Score tim away'] = dataset['Score tim away'].fillna(0).astype(int)
-
-        use_dummy = False
-        print("Models and dataset successfully loaded")
-
+        
+        USE_DUMMY = False
+        print("Successfully loaded models and dataset from Google Cloud Storage")
+    
     except Exception as e:
         print(f"Error loading models and dataset: {e}")
-        use_dummy = True
-        dataset = pd.DataFrame()
+        USE_DUMMY = True
 
-    return model_history, model_coldstart, dataset, use_dummy
+load_models_and_dataset()
 
 def get_user_data(user_id):
     doc = db.collection('users').document(user_id).get()
@@ -253,6 +222,7 @@ def format_alldata(match):
         "tiket_terjual": int(match['Jumlah Tiket Terjual']),
     }
 
+
 def format_match_recommendation(match, action="Consider buying tickets"):
     return {
         "id_match": match['ID Match'],
@@ -279,7 +249,7 @@ def get_recommendations_history(user_id):
     relevant_teams = {team.strip() for purchase in user_data['purchase_history']
                      for team in [purchase['home_team'], purchase['away_team']]}
 
-    if use_dummy:
+    if USE_DUMMY:
         recommendations = [
             format_match_recommendation(match)
             for _, match in dataset.iterrows()
@@ -290,7 +260,7 @@ def get_recommendations_history(user_id):
     return process_predictions(model_history.predict(user_data))
 
 def get_recommendations_new_user(favorite_team):
-    if use_dummy:
+    if USE_DUMMY:
         recommendations = [
             format_match_recommendation(match, "New match for you!")
             for _, match in dataset.iterrows()
@@ -345,7 +315,8 @@ def register():
             
         user_data = {
             'email': data['email'],
-            'password': bcrypt.hashpw(data['password'].encode('utf-8'), bcrypt.gensalt()).decode('utf-8'),
+            'password': bcrypt.hashpw(data['password'].encode('utf-8'), 
+                                    bcrypt.gensalt()).decode('utf-8'),
             'name': data.get('name', ''),
             'favorite_team': data.get('favorite_team', ''),
             'birth_date': data.get('birth_date'),
@@ -609,7 +580,7 @@ def get_purchase_history(user_id):
             'message': str(e)
         }), 500
 
-@app.route('/api/standings', methods=['GET'])
+@app.route('/standings', methods=['GET'])
 def get_standings():
     try:
         url = 'https://gist.githubusercontent.com/alhifnywahid/223b6d759c75c6e1be7e7c83fe4a3cf6/raw/bolatix-standings.json'
@@ -655,7 +626,8 @@ def recommend_teamfavorite():
 
         today_date = datetime.today().date()
 
-        if use_dummy:
+        # Dummy data processing
+        if USE_DUMMY:
             favorite_team = user_data.get('favorite_team', '')
             if not favorite_team:
                 return jsonify({
@@ -724,6 +696,7 @@ def recommend_teamfavorite():
         }), 200
 
     except Exception as e:
+        # Log and return the error
         print(f"Recommendation error: {e}")
         return jsonify({
             'status': False,
@@ -763,7 +736,8 @@ def recommend_history():
 
         recommendations = []
 
-        if use_dummy:
+        if USE_DUMMY:
+            # Generate recommendations from dummy data
             for _, match in dataset.iterrows():
                 match_date = None
                 try:
@@ -807,6 +781,7 @@ def recommend_history():
         }), 200
 
     except Exception as e:
+        # Log and return the error
         print(f"Recommendation error: {e}")
         return jsonify({
             'status': False,
@@ -817,7 +792,7 @@ def recommend_history():
 @app.route('/api/alldata', methods=['GET'])
 def alldata():
     try:
-        # Ensure dataset is loaded
+        # Ensure the dataset is loaded
         if dataset.empty:
             return {
                 "status": False,
