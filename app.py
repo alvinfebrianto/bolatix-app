@@ -4,6 +4,7 @@ import uuid
 import secrets
 from datetime import datetime, timedelta
 from functools import wraps
+
 import bcrypt
 import jwt
 import numpy as np
@@ -16,10 +17,11 @@ from google.cloud import storage
 from google.oauth2 import service_account
 from werkzeug.utils import secure_filename
 import requests
+
 import firebase_admin
 from firebase_admin import credentials, firestore
 
-# Initialize Flask
+# Initialize Flask app
 app = Flask(__name__)
 load_dotenv()
 
@@ -111,60 +113,62 @@ def upload_profile_picture(file, user_id):
         print(f"Upload error: {str(e)}")
         raise
 
-HISTORY_MODEL_PATH = 'models/history.h5'
-COLDSTART_MODEL_PATH = 'models/cold_start.h5'
-DATASET_PATH = 'data/dataset.csv'
-
-def download_blob_to_memory(bucket_name, source_blob_name):
-    """Downloads a blob from Google Cloud Storage to memory."""
+def download_blob(bucket_name, source_blob_name, destination_file_name):
+    """Downloads a blob from the bucket."""
     try:
         storage_client = storage.Client()
         bucket = storage_client.bucket(bucket_name)
         blob = bucket.blob(source_blob_name)
-        
-        # Download the file to memory
-        file_bytes = blob.download_as_bytes()
-        return file_bytes
+        blob.download_to_filename(destination_file_name)
+        print(f"Downloaded {source_blob_name} to {destination_file_name}.")
     except Exception as e:
-        print(f"Error downloading {source_blob_name}: {e}")
-        return None
+        print(f"Error downloading file: {e}")
+        raise
 
-def load_models_and_dataset():
-    """Load models and dataset from Google Cloud Storage."""
-    global model_history, model_coldstart, dataset, USE_DUMMY
-    
+# Load models and dataset from the bucket
+HISTORY_MODEL_PATH = "models/history.h5"
+COLDSTART_MODEL_PATH = "models/cold_start.h5"
+DATASET_PATH = "data/dataset.csv"
+
+LOCAL_HISTORY_MODEL = "/tmp/history.h5"
+LOCAL_COLDSTART_MODEL = "/tmp/cold_start.h5"
+LOCAL_DATASET = "/tmp/dataset.csv"
+
+# Download models and dataset
+try:
+    download_blob(BUCKET_NAME, HISTORY_MODEL_PATH, LOCAL_HISTORY_MODEL)
+    download_blob(BUCKET_NAME, COLDSTART_MODEL_PATH, LOCAL_COLDSTART_MODEL)
+    download_blob(BUCKET_NAME, DATASET_PATH, LOCAL_DATASET)
+
+    # Load models and dataset
+    model_history = tf.keras.models.load_model(LOCAL_HISTORY_MODEL)
+    model_coldstart = tf.keras.models.load_model(LOCAL_COLDSTART_MODEL)
+    dataset = pd.read_csv(LOCAL_DATASET)
+
+    print("Models and dataset loaded successfully.")
+except Exception as e:
+    print(f"Error loading resources: {e}")
+    model_history, model_coldstart, dataset = None, None, None
+
+# Check model and dataset availability
+USE_DUMMY = not all(os.path.exists(path) for path in [HISTORY_MODEL_PATH, COLDSTART_MODEL_PATH, DATASET_PATH])
+
+# Load dataset globally
+try:
+    dataset = pd.read_csv(DATASET_PATH)
+    dataset['Score tim home'] = dataset['Score tim home'].fillna(0).astype(int)
+    dataset['Score tim away'] = dataset['Score tim away'].fillna(0).astype(int)
+except Exception as e:
+    print(f"Error loading dataset: {e}")
+    dataset = pd.DataFrame()
+
+if not USE_DUMMY:
     try:
-        # Download and load models
-        history_model_bytes = download_blob_to_memory(GCS_BUCKET_NAME, HISTORY_MODEL_PATH)
-        coldstart_model_bytes = download_blob_to_memory(GCS_BUCKET_NAME, COLDSTART_MODEL_PATH)
-        dataset_bytes = download_blob_to_memory(GCS_BUCKET_NAME, DATASET_PATH)
-        
-        # Check if all files are downloaded successfully
-        if not (history_model_bytes and coldstart_model_bytes and dataset_bytes):
-            print("Failed to download one or more files")
-            USE_DUMMY = True
-            return
-        
-        # Load models from memory
-        with io.BytesIO(history_model_bytes) as model_file:
-            model_history = tf.keras.models.load_model(model_file)
-        
-        with io.BytesIO(coldstart_model_bytes) as model_file:
-            model_coldstart = tf.keras.models.load_model(model_file)
-        
-        # Load dataset from memory
-        dataset = pd.read_csv(io.BytesIO(dataset_bytes))
-        dataset['Score tim home'] = dataset['Score tim home'].fillna(0).astype(int)
-        dataset['Score tim away'] = dataset['Score tim away'].fillna(0).astype(int)
-        
-        USE_DUMMY = False
-        print("Successfully loaded models and dataset from Google Cloud Storage")
-    
+        model_history = tf.keras.models.load_model(HISTORY_MODEL_PATH)
+        model_coldstart = tf.keras.models.load_model(COLDSTART_MODEL_PATH)
     except Exception as e:
-        print(f"Error loading models and dataset: {e}")
+        print(f"Error loading models: {e}")
         USE_DUMMY = True
-
-load_models_and_dataset()
 
 def get_user_data(user_id):
     doc = db.collection('users').document(user_id).get()
@@ -792,14 +796,14 @@ def recommend_history():
 @app.route('/api/alldata', methods=['GET'])
 def alldata():
     try:
-        # Ensure the dataset is loaded
+        # Pastikan dataset sudah dimuat
         if dataset.empty:
             return {
                 "status": False,
                 "message": "Dataset is empty or not loaded"
             }, 500
 
-        # Format all data from the dataset
+        # Format semua data dari dataset
         all_data = [format_alldata(row) for _, row in dataset.iterrows()]
 
         return {
@@ -809,6 +813,7 @@ def alldata():
         }, 200
 
     except Exception as e:
+        # Log dan kembalikan error dalam struktur JSON
         print(f"Error retrieving all data: {e}")
         return {
             "status": False,
