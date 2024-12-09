@@ -124,7 +124,15 @@ def download_model_from_gcs(storage_client, bucket_name, source_blob_name):
         print(f"Error downloading {source_blob_name} from GCS: {e}")
         return None
 
+global use_dummy, model_history, model_coldstart, dataset
+use_dummy = True
+model_history = None
+model_coldstart = None
+dataset = pd.DataFrame()
+
 def load_models_and_dataset(storage_client):
+    global use_dummy, model_history, model_coldstart, dataset
+    
     model_history = None
     model_coldstart = None
     dataset = None
