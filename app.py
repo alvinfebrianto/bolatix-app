@@ -65,8 +65,10 @@ try:
     print(f"Successfully initialized bucket: {BUCKET_NAME}")
     
     model_history, model_coldstart, dataset, use_dummy = load_models_and_dataset(storage_client)
+    print(f"Models loaded. Use dummy data: {use_dummy}")
 except Exception as e:
     print(f"Firebase/Storage initialization error: {e}")
+    use_dummy = True
 
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp'}
 
@@ -123,7 +125,7 @@ def download_model_from_gcs(storage_client, bucket_name, source_blob_name):
     except Exception as e:
         print(f"Error downloading {source_blob_name} from GCS: {e}")
         return None
-
+    
 def load_models_and_dataset(storage_client):
     global use_dummy, model_history, model_coldstart, dataset
     
@@ -131,11 +133,6 @@ def load_models_and_dataset(storage_client):
     model_history = None
     model_coldstart = None
     dataset = pd.DataFrame()
-    
-    model_history = None
-    model_coldstart = None
-    dataset = None
-    use_dummy = True
 
     GCS_MODEL_BUCKET = BUCKET_NAME
     GCS_MODEL_PATHS = {
