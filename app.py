@@ -64,7 +64,7 @@ try:
     bucket = storage_client.bucket(BUCKET_NAME)
     print(f"Successfully initialized bucket: {BUCKET_NAME}")
     
-    model_history, model_coldstart, dataset, USE_DUMMY = load_models_and_dataset(storage_client)
+    model_history, model_coldstart, dataset, use_dummy = load_models_and_dataset(storage_client)
 except Exception as e:
     print(f"Firebase/Storage initialization error: {e}")
 
@@ -275,7 +275,7 @@ def get_recommendations_history(user_id):
     relevant_teams = {team.strip() for purchase in user_data['purchase_history']
                      for team in [purchase['home_team'], purchase['away_team']]}
 
-    if USE_DUMMY:
+    if use_dummy:
         recommendations = [
             format_match_recommendation(match)
             for _, match in dataset.iterrows()
@@ -286,7 +286,7 @@ def get_recommendations_history(user_id):
     return process_predictions(model_history.predict(user_data))
 
 def get_recommendations_new_user(favorite_team):
-    if USE_DUMMY:
+    if use_dummy:
         recommendations = [
             format_match_recommendation(match, "New match for you!")
             for _, match in dataset.iterrows()
@@ -605,7 +605,7 @@ def get_purchase_history(user_id):
             'message': str(e)
         }), 500
 
-@app.route('/standings', methods=['GET'])
+@app.route('/api/standings', methods=['GET'])
 def get_standings():
     try:
         url = 'https://gist.githubusercontent.com/alhifnywahid/223b6d759c75c6e1be7e7c83fe4a3cf6/raw/bolatix-standings.json'
@@ -651,7 +651,7 @@ def recommend_teamfavorite():
 
         today_date = datetime.today().date()
 
-        if USE_DUMMY:
+        if use_dummy:
             favorite_team = user_data.get('favorite_team', '')
             if not favorite_team:
                 return jsonify({
@@ -759,7 +759,7 @@ def recommend_history():
 
         recommendations = []
 
-        if USE_DUMMY:
+        if use_dummy:
             for _, match in dataset.iterrows():
                 match_date = None
                 try:
