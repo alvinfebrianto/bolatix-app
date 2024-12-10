@@ -4,7 +4,6 @@ import uuid
 import secrets
 from datetime import datetime, timedelta
 from functools import wraps
-
 import bcrypt
 import jwt
 import numpy as np
@@ -17,11 +16,10 @@ from google.cloud import storage
 from google.oauth2 import service_account
 from werkzeug.utils import secure_filename
 import requests
-
 import firebase_admin
 from firebase_admin import credentials, firestore
 
-# Initialize Flask app
+# Initialize Flask
 app = Flask(__name__)
 load_dotenv()
 
@@ -134,21 +132,39 @@ LOCAL_HISTORY_MODEL = "/tmp/history.h5"
 LOCAL_COLDSTART_MODEL = "/tmp/cold_start.h5"
 LOCAL_DATASET = "/tmp/dataset.csv"
 
-# Download models and dataset
+# Download and load dataset
+dataset = None
+if os.path.exists(LOCAL_DATASET):
+    try:
+        dataset = pd.read_csv(LOCAL_DATASET)
+        print("Dataset loaded from local file.")
+    except Exception as e:
+        print(f"Error loading local dataset: {e}")
+        dataset = None
+
+if dataset is None:
+    try:
+        download_blob(BUCKET_NAME, DATASET_PATH, LOCAL_DATASET)
+        dataset = pd.read_csv(LOCAL_DATASET)
+        print("Dataset downloaded and loaded successfully.")
+    except Exception as e:
+        print(f"Error downloading or loading dataset: {e}")
+        dataset = pd.DataFrame()
+
+# Download and load models
 try:
-    download_blob(BUCKET_NAME, HISTORY_MODEL_PATH, LOCAL_HISTORY_MODEL)
-    download_blob(BUCKET_NAME, COLDSTART_MODEL_PATH, LOCAL_COLDSTART_MODEL)
-    download_blob(BUCKET_NAME, DATASET_PATH, LOCAL_DATASET)
-
-    # Load models and dataset
+    if not os.path.exists(LOCAL_HISTORY_MODEL):
+        download_blob(BUCKET_NAME, HISTORY_MODEL_PATH, LOCAL_HISTORY_MODEL)
     model_history = tf.keras.models.load_model(LOCAL_HISTORY_MODEL)
-    model_coldstart = tf.keras.models.load_model(LOCAL_COLDSTART_MODEL)
-    dataset = pd.read_csv(LOCAL_DATASET)
 
-    print("Models and dataset loaded successfully.")
+    if not os.path.exists(LOCAL_COLDSTART_MODEL):
+        download_blob(BUCKET_NAME, COLDSTART_MODEL_PATH, LOCAL_COLDSTART_MODEL)
+    model_coldstart = tf.keras.models.load_model(LOCAL_COLDSTART_MODEL)
+
+    print("Models loaded successfully.")
 except Exception as e:
-    print(f"Error loading resources: {e}")
-    model_history, model_coldstart, dataset = None, None, None
+    print(f"Error loading models: {e}")
+    model_history, model_coldstart = None, None
 
 # Check model and dataset availability
 USE_DUMMY = not all(os.path.exists(path) for path in [HISTORY_MODEL_PATH, COLDSTART_MODEL_PATH, DATASET_PATH])
@@ -225,7 +241,6 @@ def format_alldata(match):
         "tanggal": match['Tanggal'],
         "tiket_terjual": int(match['Jumlah Tiket Terjual']),
     }
-
 
 def format_match_recommendation(match, action="Consider buying tickets"):
     return {
@@ -584,7 +599,7 @@ def get_purchase_history(user_id):
             'message': str(e)
         }), 500
 
-@app.route('/standings', methods=['GET'])
+@app.route('/api/standings', methods=['GET'])
 def get_standings():
     try:
         url = 'https://gist.githubusercontent.com/alhifnywahid/223b6d759c75c6e1be7e7c83fe4a3cf6/raw/bolatix-standings.json'
@@ -700,7 +715,6 @@ def recommend_teamfavorite():
         }), 200
 
     except Exception as e:
-        # Log and return the error
         print(f"Recommendation error: {e}")
         return jsonify({
             'status': False,
@@ -785,7 +799,6 @@ def recommend_history():
         }), 200
 
     except Exception as e:
-        # Log and return the error
         print(f"Recommendation error: {e}")
         return jsonify({
             'status': False,
@@ -796,29 +809,26 @@ def recommend_history():
 @app.route('/api/alldata', methods=['GET'])
 def alldata():
     try:
-        # Pastikan dataset sudah dimuat
         if dataset.empty:
-            return {
+            return jsonify({
                 "status": False,
-                "message": "Dataset is empty or not loaded"
-            }, 500
+                "message": "Dataset is empty or could not be loaded"
+            }), 500
 
-        # Format semua data dari dataset
         all_data = [format_alldata(row) for _, row in dataset.iterrows()]
 
-        return {
+        return jsonify({
             "status": True,
             "message": "All data retrieved successfully",
             "data": all_data
-        }, 200
+        }), 200
 
     except Exception as e:
-        # Log dan kembalikan error dalam struktur JSON
         print(f"Error retrieving all data: {e}")
-        return {
+        return jsonify({
             "status": False,
             "message": "An error occurred while retrieving all data"
-        }, 500
+        }), 500
     
 @app.route('/api/users/<user_id>/profile-picture', methods=['GET', 'POST', 'PUT', 'DELETE'])
 def manage_profile_picture(user_id):
