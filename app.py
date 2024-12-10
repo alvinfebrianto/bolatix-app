@@ -114,9 +114,9 @@ def upload_profile_picture(file, user_id):
         raise
 
 # Define bucket and file paths
-HISTORY_MODEL_BLOB_PATH = "/models/history.h5"
-COLDSTART_MODEL_BLOB_PATH = "/models/cold_start.h5"
-DATASET_BLOB_PATH = "/data/dataset.csv"
+HISTORY_MODEL_BLOB_PATH = "models/history.h5"
+COLDSTART_MODEL_BLOB_PATH = "models/cold_start.h5"
+DATASET_BLOB_PATH = "data/dataset.csv"
 
 # Local temporary paths for downloaded files
 HISTORY_MODEL_PATH = "/tmp/history.h5"
